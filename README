@@ -40,8 +40,10 @@ These commands will cause the bot to join #some_channel, leave #some_channel,
 reload all running code, and quit, respectively.
 
 You can also send it messages through the erlang shell:
-> erlbot:reload(). %% This will reload all running code
-> erlbot ! die.    %% This will kill it.
+> erlbot:reload().       %% This will reload all running code
+> erlbot ! die.          %% This will kill it.
+> erlbot:load(module).   %% This will load the module 'module'.
+> erlbot:unload(module). %% This will unload the module 'module'.
 
 To actually have it do something, you need to add some plugins.
 Only one is included (though writing your own should be a fairly trivial
