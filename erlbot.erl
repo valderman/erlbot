@@ -135,6 +135,7 @@ main(Sock, AdmPass, Nick, Handlers) ->
 	    irc:quit(Sock, "No particular reason."),
 	    unregister(erlbot),
 	    gen_tcp:close(Sock);
+	    lists:map(fun(M) -> M:die() end, Handlers),
 
 	%% Respond to PING messages
 	{tcp, S, <<"PING ", Data/binary>>} ->
