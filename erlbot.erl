@@ -1,87 +1,109 @@
 -module(erlbot).
--export([start/2, main/4, quakenet/0]).
+-export([start/3, quakenet/0]).
 
 quakenet() ->
     {"irc.quakenet.org", 6667}.
 
-%% Start the bot
-start({Addr, Port}, {Nick, AdminPass}) ->
-    I = case compile:file(irc) of
-	    {ok, Irc} -> Irc;
-	    _         -> erlang:error("Unable to compile IRC module!")
-	end,
-    
+%% Start the bot.
+%% The first argument is the pair of {address, port} of the IRC service to
+%%   connect to.
+%% The second argument is the nickname to use for the bot, and the admin
+%%   password, used to give the bot administrative commands.
+%% The third argument is a list of handler modules for various events.
+%%   A handler module must export the functions priv/2, chan/2, noise/2,
+%%   init/2 and die/0.
+%%   See dpress.erl for an example of what such a module might look like.
+start({Addr, Port}, {Nick, AdminPass}, Handlers) ->
+    case reload([irc, erlbot] ++ Handlers) of
+	ok -> ok;
+	_  -> erlang:error("Unable to load modules!")
+    end,
+
+    %% Open connection to IRC service
     S = case gen_tcp:connect(Addr, Port, [binary]) of
 	    {ok, Socket} -> Socket;
 	    _            -> erlang:error("Unable to connect!")
 	end,
 
-    register(erlbot, spawn(fun() -> main(I, S, AdminPass, Nick) end)),
+    %% Create connection handler and register
+    register(erlbot, spawn(fun()->main(S, AdminPass, Nick, Handlers) end)),
     gen_tcp:controlling_process(S, whereis(erlbot)),
+
+    %% Init IRC connection
     irc:init(S, Nick),
+
+    %% Init plugins
+    lists:map(fun(M) -> spawn(fun() -> M:init(S, Nick) end) end, Handlers),
     erlbot.
 
 %% Reload a bunch of modules
-reload([F|Files], Mods) ->
+reload([F|Files]) ->
     case compile:file(F) of
 	{ok, M} ->
 	    code:purge(F),
-	    {module, Mod} = code:load_file(M),
-	    reload(Files, [Mod | Mods]);
+	    {module, _} = code:load_file(M),
+	    reload(Files);
 	Error ->
 	    Error
     end;
-reload(_, Mods) ->
-    {ok, lists:reverse(Mods)}.
+reload(_) ->
+    ok.
 
 %% Our main message loop
-main(Irc, Sock, AdmPass, Nick) ->
+main(Sock, AdmPass, Nick, Handlers) ->
     receive
 	%% Reload all running code, then report error or success to the caller.
 	{reload, From} ->
 	    io:format("Trying to reload...~n", []),
-	    case reload([irc, erlbot], []) of
-		{ok, [I, B]} ->
+	    case reload([irc, erlbot] ++ Handlers) of
+		ok ->
 		    From ! ok,
 		    io:format("Reload succeeded!~n", []),
-		    B:main(I, Sock, AdmPass, Nick);
+		    main(Sock, AdmPass, Nick, Handlers);
 		Error ->
 		    From ! Error,
 		    io:format("Reload FAILED!~n", []),
-		    main(Irc, Sock, AdmPass, Nick)
+		    main(Sock, AdmPass, Nick, Handlers)
 	    end;
+
+	%% Restart all plugins
+	{restart_plugins, From} ->
+	    io:format("Restarting all plugins...", []),
+	    lists:map(fun(M) -> M:die() end, Handlers),
+	    lists:map(fun(M) -> M:init(Sock, Nick) end, Handlers),
+	    io:format("OK!~n", []);
 
 	%% Someone wants us dead; let's obey!
 	die ->
 	    io:format("OK, dying...~n"),
-	    Irc:quit(Sock, "No particular reason."),
+	    irc:quit(Sock, "No particular reason."),
 	    unregister(erlbot),
 	    gen_tcp:close(Sock);
 
 	%% Respond to PING messages
 	{tcp, S, <<"PING ", Data/binary>>} ->
-	    Irc:pong(S, Data),
-	    main(Irc, Sock, AdmPass, Nick);
+	    irc:pong(S, Data),
+	    main(Sock, AdmPass, Nick, Handlers);
 
 	%% Unknown message; discard it.
-	{tcp, S, Data} ->
+	{tcp, _, Data} ->
 	    lists:map(fun(Msg) ->
-			      handle_message(Sock, Irc, AdmPass, Nick, Msg)
+			      handle_message(Sock, AdmPass, Nick, Handlers, Msg)
 		      end,
-		      lines(binary_to_list(Data))),
-	    main(Irc, Sock, AdmPass, Nick)
+		      irc:lines(binary_to_list(Data))),
+	    main(Sock, AdmPass, Nick, Handlers)
     end.
 
 %% Handles a single IRC message.
-handle_message(Sock, Irc, AdmPass, Nick, Message) ->
+handle_message(Sock, AdmPass, Nick, Handlers, Message) ->
     pong_if_necessary(Sock, Message),
-    case Irc:parse(Message, Nick) of
+    case irc:parse(Message, Nick) of
 	{privmsg, Msg} ->
-	    spawn(fun() -> priv_handler(Sock, Irc, AdmPass, Msg) end);
+	    spawn(fun() -> priv_handler(Sock, AdmPass, Handlers, Msg) end);
 	{chanmsg, Msg} ->
-	    spawn(fun() -> chan_handler(Sock, Irc, Msg) end);
+	    spawn(fun() -> chan_handler(Sock, Handlers, Msg) end);
 	{noise,   Msg} ->
-	    spawn(fun() -> noise_handler(Sock, Irc, Msg) end);
+	    spawn(fun() -> noise_handler(Sock, Handlers, Msg) end);
 	_ ->
 	    whatever
     end.
@@ -96,27 +118,6 @@ pong_if_necessary(Sock, Msg) ->
 	    whatever
     end.
 
-%% Break the string on every newline.
-lines(Xs) ->
-    lines(Xs, []).
-
-lines([13|Xs], L) ->
-    case L of
-	[_|_] -> [lists:reverse(L) | lines(Xs, [])];
-	_     -> lines(Xs, [])
-    end;
-lines([10|Xs], L) ->
-    case L of
-	[_|_] -> [lists:reverse(L) | lines(Xs, [])];
-	_     -> lines(Xs, [])
-    end;
-lines([X|Xs], L) ->
-    lines(Xs, [X | L]);
-lines(_, L=[_|_]) ->
-    [lists:reverse(L)];
-lines(_, _) ->
-    [].
-
 %% Sends a reload message and waits for confirmation.
 reload() ->
     erlbot ! {reload, self()},
@@ -124,35 +125,40 @@ reload() ->
 
 %% Handle private (whispered) messages, but only if prefixed with the correct
 %% password.
-priv_handler(Sock, Irc, AdmPass, {From, To, Message}) ->
+priv_handler(Sock, AdmPass, Handlers, Mess={From, _, Message}) ->
     case irc:words(Message) of
 	[AdmPass | Cmd] ->
 	    case Cmd of
 		["join", Channel] ->
-		    Irc:join(Sock, Channel);
+		    irc:join(Sock, Channel);
 		["part", Channel] ->
-		    Irc:part(Sock, Channel);
+		    irc:part(Sock, Channel);
 		["reload"] ->
 		    case reload() of
 			ok ->
-			    Irc:privmsg(Sock, From, "Reloaded!");
-			Err ->
+			    irc:privmsg(Sock, From, "Reloaded!");
+			_ ->
 			    ErrMsg = "Reload failed!",
-			    Irc:privmst(Sock, From, ErrMsg)
+			    irc:privmst(Sock, From, ErrMsg)
 		    end;
 		["die"] ->
 		    erlbot ! die;
 		_ ->
-		    Irc:privmsg(Sock, From, "No such command!")
+		    irc:privmsg(Sock, From, "No such command!")
 	    end;
 	_ ->
-	    Irc:privmsg(Sock, From, "Wrong password!")
+	    lists:map(fun(M) ->
+			      spawn(fun() ->
+					    M:priv(Sock, Mess)
+				    end)
+		      end, Handlers)
     end.
 
 %% Handle messages directed to us in a channel.
-chan_handler(Sock, Irc, Message) ->
-    ok.
+chan_handler(Sock, Handlers, Msg) ->
+    io:format("börjar chanspamma~n", []),
+    lists:map(fun(M) -> spawn(fun() -> M:chan(Sock, Msg) end) end, Handlers).
 
 %% Handle messages directed to us in a channel.
-noise_handler(Sock, Irc, Message) ->
-    ok.
+noise_handler(Sock, Handlers, Msg) ->
+    lists:map(fun(M) -> spawn(fun() -> M:noise(Sock, Msg) end) end, Handlers).

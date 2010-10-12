@@ -1,6 +1,27 @@
 -module(irc).
 -export([init/2, nick/2, quit/2, pong/2, join/2, part/2, privmsg/3, parse/2,
-	 words/1]).
+	 words/1, lines/1]).
+
+%% Break the string on every newline.
+lines(Xs) ->
+    lines(Xs, []).
+
+lines([13|Xs], L) ->
+    case L of
+	[_|_] -> [lists:reverse(L) | lines(Xs, [])];
+	_     -> lines(Xs, [])
+    end;
+lines([10|Xs], L) ->
+    case L of
+	[_|_] -> [lists:reverse(L) | lines(Xs, [])];
+	_     -> lines(Xs, [])
+    end;
+lines([X|Xs], L) ->
+    lines(Xs, [X | L]);
+lines(_, L=[_|_]) ->
+    [lists:reverse(L)];
+lines(_, _) ->
+    [].
 
 %% Break a string on every space.
 words(Xs) -> words(Xs, []).
