@@ -89,9 +89,16 @@ mediator(Sock) ->
 die() ->    
     dpress ! die.
 
-%% If we got a private message, feed the text generator with it.
+%% If we got a private message, treat it as a question.
 priv(Sock, {From, Chan, Msg}) ->
-    noise(Sock, {From, Chan, Msg}).
+    dpress ! {ask, Msg, self()},
+    receive
+	{reply, Ans} ->
+	    [Text | _] = irc:lines(Ans),
+	    irc:privmsg(Sock, From, Text);
+	_ ->
+	    ok
+    end.
 
 %% If we got a directed channel message, treat it as a question.
 chan(Sock, {From, Chan, Msg}) ->
