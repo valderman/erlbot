@@ -1,5 +1,5 @@
 -module(erlbot).
--export([start/3, quakenet/0]).
+-export([start/3, main/4, quakenet/0]).
 
 quakenet() ->
     {"irc.quakenet.org", 6667}.
@@ -39,10 +39,14 @@ start({Addr, Port}, {Nick, AdminPass}, Handlers) ->
 %% Reload a bunch of modules
 reload([F|Files]) ->
     case compile:file(F) of
-	{ok, M} ->
+	{ok, _} ->
 	    code:purge(F),
-	    {module, _} = code:load_file(M),
-	    reload(Files);
+	    case code:load_file(F) of
+		{module, _} ->
+		    reload(Files);
+		Err ->
+		    Err
+	    end;
 	Error ->
 	    Error
     end;
@@ -58,13 +62,12 @@ main(Sock, AdmPass, Nick, Handlers) ->
 	    case reload([irc, erlbot] ++ Handlers) of
 		ok ->
 		    From ! ok,
-		    io:format("Reload succeeded!~n", []),
-		    main(Sock, AdmPass, Nick, Handlers);
+		    io:format("Reload succeeded!~n", []);
 		Error ->
 		    From ! Error,
-		    io:format("Reload FAILED!~n", []),
-		    main(Sock, AdmPass, Nick, Handlers)
-	    end;
+		    io:format("Reload FAILED!~nReason: ~w~n", [Error])
+	    end,
+	    erlbot:main(Sock, AdmPass, Nick, Handlers);
 
 	%% Restart all plugins
 	{restart_plugins, From} ->
@@ -156,7 +159,6 @@ priv_handler(Sock, AdmPass, Handlers, Mess={From, _, Message}) ->
 
 %% Handle messages directed to us in a channel.
 chan_handler(Sock, Handlers, Msg) ->
-    io:format("börjar chanspamma~n", []),
     lists:map(fun(M) -> spawn(fun() -> M:chan(Sock, Msg) end) end, Handlers).
 
 %% Handle messages directed to us in a channel.
