@@ -1,8 +1,24 @@
 -module(erlbot).
--export([start/3, main/4, quakenet/0]).
+-export([start/3, main/4, quakenet/0, reload/0, load/1, unload/1]).
 
 quakenet() ->
     {"irc.quakenet.org", 6667}.
+
+
+%% Sends a reload message and waits for confirmation.
+reload() ->
+    erlbot ! {reload, self()},
+    receive X -> X end.
+
+%% Attempts to load a module.
+load(Module) ->
+    erlbot ! {load, Module, self()},
+    receive X -> X end.
+
+%% Attempts to unload a module.
+unload(Module) ->
+    erlbot ! {unload, Module, self()},
+    receive X -> X end.
 
 %% Start the bot.
 %% The first argument is the pair of {address, port} of the IRC service to
@@ -69,7 +85,44 @@ main(Sock, AdmPass, Nick, Handlers) ->
 	    end,
 	    erlbot:main(Sock, AdmPass, Nick, Handlers);
 
-	%% Restart all plugins
+	%% Adds and starts a new plugin.
+	{load, Plug, From} ->
+	    io:format("Loading plugin ~w~n", [Plug]),
+	    case lists:member(Plug, Handlers) of
+		true ->
+		    io:format("Plugin already loaded!", []),
+		    From ! already_loaded,
+		    main(Sock, AdmPass, Nick, Handlers);
+		_ ->
+		    case reload([Plug]) of
+			ok ->
+			    Plug:init(Sock, Nick),
+			    From ! ok,
+			    main(Sock, AdmPass, Nick, [Plug | Handlers]);
+			Err ->
+			    io:format("Loading plugin FAILED!~n", []),
+			    io:format("Readon: ~w~n", [Err]),
+			    From ! Err,
+			    main(Sock, AdmPass, Nick, Handlers)
+		    end
+	    end;
+
+	%% Stops and unloads a plugin.
+	{unload, Plug, From} ->
+	    io:format("Unloading plugin ~w~n", [Plug]),
+	    case lists:member(Plug, Handlers) of
+		true ->
+		    Plug:die(),
+		    Hs = lists:delete(Plug, Handlers),
+		    From ! ok,
+		    main(Sock, AdmPass, Nick, Hs);
+		_ ->
+		    io:format("Plugin not loaded!~n", []),
+		    From ! not_loaded,
+		    main(Sock, AdmPass, Nick, Handlers)
+	    end;
+
+	%% Restart all plugins.
 	{restart_plugins, From} ->
 	    io:format("Restarting all plugins...", []),
 	    lists:map(fun(M) -> M:die() end, Handlers),
@@ -120,11 +173,6 @@ pong_if_necessary(Sock, Msg) ->
 	_ ->
 	    whatever
     end.
-
-%% Sends a reload message and waits for confirmation.
-reload() ->
-    erlbot ! {reload, self()},
-    receive X -> X end.
 
 %% Handle private (whispered) messages, but only if prefixed with the correct
 %% password.
