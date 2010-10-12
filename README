@@ -1,0 +1,82 @@
+** Contents
+
+1. What is Erlbot?
+2. How do I use it?
+3. About
+
+---
+
+
+1. What is Erlbot?
+
+Erlbot is an experimental IRC bot written in Erlang. I wrote it to teach
+myself a bit of Erlang, so it's not all that enterprisey or even very well
+tested. It also contains all manner of unsound practices when it comes to
+networking (assuming lots of things about protocols, for example,) but
+whatever; it works and it was fun to write.
+
+Erlbot features a simple plugin structure and hot code reloading, because
+Erlang is cool like that.
+
+---
+
+
+2. How do I use it?
+
+You need Erlang installed on your system to run Erlbot. To connect to a server,
+first start an Erlang shell by running:
+$ erl
+Then, from within the Erlang shell, start the bot itself:
+> c(erlbot),
+> erlbot:start({"hostname", 6667}, {"bot_nick", "admin_pass"}, []).
+
+This will start the bot. You can boss it around by /msg:ing it:
+/msg bot_nick admin_pass join #some_channel
+/msg bot_nick admin_pass part #some_channel
+/msg bot_nick admin_pass reload
+/msg bot_nick admin_pass die
+
+These commands will cause the bot to join #some_channel, leave #some_channel,
+reload all running code, and quit, respectively.
+
+You can also send it messages through the erlang shell:
+> erlbot:reload(). %% This will reload all running code
+> erlbot ! die.    %% This will kill it.
+
+To actually have it do something, you need to add some plugins.
+Only one is included (though writing your own should be a fairly trivial
+affair;) dpress.erl. The dpress plugin requires another silly project of mine,
+dpress, in order to do something (namely, generate random sentences based on
+learnings from the channels the bot is in.)
+
+To have that setup, here's a quick walkthrough:
+1. Get dpress from http://github.com/valderman/dpress and compile it:
+   $ git clone http://github.com/valderman/dpress.git ; cd dpress
+   $ make
+   (This requires that you have GHC with network libraries installed.)
+2. Build a dictionary to start with from some text you like:
+   $ ./compile < some_text.txt > dictionary.bin
+3. Start Erlbot with the dpress plugin:
+   > c(erlbot),
+   > erlbot:start({"hostname", 6667}, {"bot_nick", "admin_pass"}, [dpress]).
+4. Congratulations, you're now up and running!
+
+Like Erlbot, you can use the Erlang shell to boss the dpress plugin around:
+> erlbot ! save. %% This will save the current dictionary to disk.
+> erlbot ! load. %% This will reload the dictionary you saved to disk.
+
+---
+
+
+3. About
+
+dpress (henceforth "the software") is written by Anton Ekblad (anton@ekblad.cc)
+and is made available to you under the terms of the WTFPL version 2.
+The full text of the license can be found at http://sam.zoy.org/wtfpl/.
+
+The author(s) of the software do not accept any responsibility or liability for
+anything, related to the software or not. The software comes with no warranty
+whatsoever.
+
+Although this is not required by the license, the author(s) would be very happy
+if you contributed any improvements you make back to dpress.
