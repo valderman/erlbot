@@ -132,10 +132,13 @@ priv_handler(Sock, AdmPass, Handlers, Mess={From, _, Message}) ->
     case irc:words(Message) of
 	[AdmPass | Cmd] ->
 	    case Cmd of
+		%% Command to join a channel.
 		["join", Channel] ->
 		    irc:join(Sock, Channel);
+		%% Command to leave a channel.
 		["part", Channel] ->
 		    irc:part(Sock, Channel);
+		%% Command to reload all running code.
 		["reload"] ->
 		    case reload() of
 			ok ->
@@ -144,6 +147,7 @@ priv_handler(Sock, AdmPass, Handlers, Mess={From, _, Message}) ->
 			    ErrMsg = "Reload failed!",
 			    irc:privmst(Sock, From, ErrMsg)
 		    end;
+		%% Command to kill the bot and go home.
 		["die"] ->
 		    erlbot ! die;
 		_ ->
