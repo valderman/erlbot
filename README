@@ -64,8 +64,8 @@ To have that setup, here's a quick walkthrough:
 4. Congratulations, you're now up and running!
 
 Like Erlbot, you can use the Erlang shell to boss the dpress plugin around:
-> erlbot ! save. %% This will save the current dictionary to disk.
-> erlbot ! load. %% This will reload the dictionary you saved to disk.
+> dpress ! save. %% This will save the current dictionary to disk.
+> dpress ! load. %% This will reload the dictionary you saved to disk.
 
 ---
 
