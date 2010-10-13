@@ -38,11 +38,14 @@ load.
 You can boss it around by /msg:ing it:
 /msg bot_nick admin_pass join #some_channel
 /msg bot_nick admin_pass part #some_channel
+/msg bot_nick admin_pass load some_plugin
+/msg bot_nick admin_pass unload some_plugin
 /msg bot_nick admin_pass reload
 /msg bot_nick admin_pass die
 
 These commands will cause the bot to join #some_channel, leave #some_channel,
-reload all running code, and quit, respectively.
+load some_plugin, unload some_plugin, reload all running code, and quit,
+respectively.
 
 You can also send it messages through the erlang shell:
 > erlbot:reload().       %% This will reload all running code
