@@ -16,8 +16,7 @@ ready_to_connect() ->
 		{ok, Sock} ->
 		    %% Go into the active state, then arrange for the message
 		    %% to be resent after the handshake.
-		    Pid = self(),
-		    spawn(fun() -> timer:sleep(3000), Pid ! Msg end),
+		    timer:send_after(3000, Msg),
 		    dpress:mediator(Sock);
 		_ ->
 		    case Msg of
