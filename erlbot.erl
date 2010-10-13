@@ -1,5 +1,8 @@
 -module(erlbot).
--export([start/3, main/4, quakenet/0, reload/0, load/1, unload/1]).
+%% Expose main and connect as parts of the interface to facilitate hot code
+%% update.
+-export([start/3, quakenet/0, reload/0, load/1, unload/1,
+	 main/5, connect/4]).
 
 quakenet() ->
     {"irc.quakenet.org", 6667}.
@@ -29,28 +32,69 @@ unload(Module) ->
 %%   A handler module must export the functions priv/2, chan/2, noise/2,
 %%   init/2 and die/0.
 %%   See dpress.erl for an example of what such a module might look like.
-start({Addr, Port}, {Nick, AdminPass}, Handlers) ->
+start(Server, Config, Handlers) ->
     case reload([irc, erlbot] ++ Handlers) of
 	ok -> ok;
 	_  -> erlang:error("Unable to load modules!")
     end,
 
+    %% Spawn our main process and register it
+    Pid = spawn(fun() -> connect(Server, Config, Handlers, 0) end),
+    NeedToUnregister = lists:member(erlbot, registered()),
+    if
+	NeedToUnregister ->
+	    unregister(erlbot);
+	true ->
+	    whatever
+    end,
+    register(erlbot, Pid),
+    ok.
+
+%% Connect to the given service.
+%% If we already failed three times, wait ten minutes and retry.
+connect(Server, Config, Handlers, 3) ->
+    io:format("Failed three connection attempts, retrying in 10 mins.~n"),
+    timer:send_after(10*60*1000, retry),
+    connect(Server, Config, Handlers, await_timeout);
+
+connect(Server, Config, Handlers, await_timeout) ->
+    receive
+	retry ->
+	    connect(Server, Config, Handlers, 0);
+	die ->
+	    kill_self(no_socket, Handlers);
+	{reload, From} ->
+	    reload_all(Handlers, From),
+	    erlbot:connect(Server, Config, Handlers, await_timeout)
+    end;
+
+connect({Addr, Port}, {Nick, AdminPass}, Handlers, FailedTries) ->
     %% Open connection to IRC service
-    S = case gen_tcp:connect(Addr, Port, [binary]) of
-	    {ok, Socket} -> Socket;
-	    _            -> erlang:error("Unable to connect!")
-	end,
+    io:format("Connecting to ~s...~n", [Addr]),
+    case gen_tcp:connect(Addr, Port, [binary]) of
+	{ok, Socket} ->
+	    io:format("OK! Initializing IRC connection...~n"),
+	    %% Init IRC connection
+	    irc:init(Socket, Nick),
 
-    %% Create connection handler and register
-    register(erlbot, spawn(fun()->main(S, AdminPass, Nick, Handlers) end)),
-    gen_tcp:controlling_process(S, whereis(erlbot)),
+	    io:format("OK! Initializing plugins...~n"),
+	    %% Init plugins
+	    lists:map(fun(M) ->
+			      spawn(fun() -> M:init(Socket, Nick) end)
+		      end, Handlers),
+	    Reconnect = fun() ->
+				connect({Addr, Port},
+					{Nick, AdminPass},
+					Handlers,
+					0)
+			end,
+	    io:format("OK! Entering main loop.~n"),
+	    main(Socket, AdminPass, Nick, Handlers, Reconnect);
+	_ ->
+	    io:format("Failed! Retrying...~n"),
+	    connect({Addr, Port}, {Nick, AdminPass}, Handlers, FailedTries+1)
+    end.
 
-    %% Init IRC connection
-    irc:init(S, Nick),
-
-    %% Init plugins
-    lists:map(fun(M) -> spawn(fun() -> M:init(S, Nick) end) end, Handlers),
-    erlbot.
 
 %% Reload a bunch of modules
 reload([F|Files]) ->
@@ -69,21 +113,38 @@ reload([F|Files]) ->
 reload(_) ->
     ok.
 
+%% Reload all running code, then notify whoever requested it.
+reload_all(Handlers, From) ->
+    io:format("Trying to reload...~n", []),
+    case reload([irc, erlbot] ++ Handlers) of
+	ok ->
+	    From ! ok,
+	    io:format("Reload succeeded!~n", []);
+	Error ->
+	    From ! Error,
+	    io:format("Reload FAILED!~nReason: ~w~n", [Error])
+    end.
+
 %% Our main message loop
-main(Sock, AdmPass, Nick, Handlers) ->
+main(Sock, AdmPass, Nick, Handlers, Reconnect) ->
+    %% Keep the loop call in a variable; less hassle that way.
+    Loop = fun() ->
+		   erlbot:main(Sock, AdmPass, Nick, Handlers, Reconnect)
+	   end,
+
     receive
+	%% The connection died; kill all plugins, then try to reconnect.
+	{tcp_closed, _} ->
+	    io:format("Connection lost; reconnecting!~n"),
+	    lists:map(fun(M) ->
+			      spawn(fun() -> M:die() end)
+		      end, Handlers),	    
+	    Reconnect();
+
 	%% Reload all running code, then report error or success to the caller.
 	{reload, From} ->
-	    io:format("Trying to reload...~n", []),
-	    case reload([irc, erlbot] ++ Handlers) of
-		ok ->
-		    From ! ok,
-		    io:format("Reload succeeded!~n", []);
-		Error ->
-		    From ! Error,
-		    io:format("Reload FAILED!~nReason: ~w~n", [Error])
-	    end,
-	    erlbot:main(Sock, AdmPass, Nick, Handlers);
+	    reload_all(Handlers, From),
+	    Loop();
 
 	%% Adds and starts a new plugin.
 	{load, Plug, From} ->
@@ -92,18 +153,22 @@ main(Sock, AdmPass, Nick, Handlers) ->
 		true ->
 		    io:format("Plugin already loaded!", []),
 		    From ! already_loaded,
-		    main(Sock, AdmPass, Nick, Handlers);
+		    Loop();
 		_ ->
 		    case reload([Plug]) of
 			ok ->
 			    Plug:init(Sock, Nick),
 			    From ! ok,
-			    main(Sock, AdmPass, Nick, [Plug | Handlers]);
+			    main(Sock,
+				 AdmPass,
+				 Nick,
+				 [Plug | Handlers],
+				 Reconnect);
 			Err ->
 			    io:format("Loading plugin FAILED!~n", []),
 			    io:format("Readon: ~w~n", [Err]),
 			    From ! Err,
-			    main(Sock, AdmPass, Nick, Handlers)
+			    Loop()
 		    end
 	    end;
 
@@ -115,32 +180,29 @@ main(Sock, AdmPass, Nick, Handlers) ->
 		    Plug:die(),
 		    Hs = lists:delete(Plug, Handlers),
 		    From ! ok,
-		    main(Sock, AdmPass, Nick, Hs);
+		    main(Sock, AdmPass, Nick, Hs, Reconnect);
 		_ ->
 		    io:format("Plugin not loaded!~n", []),
 		    From ! not_loaded,
-		    main(Sock, AdmPass, Nick, Handlers)
+		    Loop()
 	    end;
 
 	%% Restart all plugins.
-	{restart_plugins, From} ->
+	restart_plugins ->
 	    io:format("Restarting all plugins...", []),
 	    lists:map(fun(M) -> M:die() end, Handlers),
 	    lists:map(fun(M) -> M:init(Sock, Nick) end, Handlers),
-	    io:format("OK!~n", []);
+	    io:format("OK!~n", []),
+	    Loop();
 
 	%% Someone wants us dead; let's obey!
 	die ->
-	    io:format("OK, dying...~n"),
-	    irc:quit(Sock, "No particular reason."),
-	    unregister(erlbot),
-	    gen_tcp:close(Sock),
-	    lists:map(fun(M) -> M:die() end, Handlers);
+	    kill_self(Sock, Handlers);
 
 	%% Respond to PING messages
 	{tcp, S, <<"PING ", Data/binary>>} ->
 	    irc:pong(S, Data),
-	    main(Sock, AdmPass, Nick, Handlers);
+	    Loop();
 
 	%% Unknown message; discard it.
 	{tcp, _, Data} ->
@@ -148,8 +210,18 @@ main(Sock, AdmPass, Nick, Handlers) ->
 			      handle_message(Sock, AdmPass, Nick, Handlers, Msg)
 		      end,
 		      irc:lines(binary_to_list(Data))),
-	    main(Sock, AdmPass, Nick, Handlers)
+	    Loop()
     end.
+
+%% Kill the bot.
+kill_self(no_socket, Handlers) ->
+    io:format("OK, dying...~n"),
+    unregister(erlbot),
+    lists:map(fun(M) -> M:die() end, Handlers);
+kill_self(Sock, Handlers) ->
+    irc:quit(Sock, "No particular reason."),
+    gen_tcp:close(Sock),
+    kill_self(no_socket, Handlers).
 
 %% Handles a single IRC message.
 handle_message(Sock, AdmPass, Nick, Handlers, Message) ->
