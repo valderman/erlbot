@@ -237,6 +237,7 @@ kill_self(no_socket, Handlers) ->
     lists:map(fun(M) -> M:die() end, Handlers);
 kill_self(Sock, Handlers) ->
     irc:quit(Sock, "No particular reason."),
+    gen_tcp:shutdown(Sock, read_write),
     gen_tcp:close(Sock),
     kill_self(no_socket, Handlers).
 

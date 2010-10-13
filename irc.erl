@@ -146,4 +146,4 @@ user(Sock, User, Host, Server, Real) ->
 
 quit(Sock, Msg) ->
     M = list_to_binary(Msg),
-    gen_tcp:send(Sock, <<"QUIT ", M/binary, "\r\n">>).
+    gen_tcp:send(Sock, <<"QUIT ", ":", M/binary, "\r\n">>).
