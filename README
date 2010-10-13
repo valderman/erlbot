@@ -28,9 +28,14 @@ first start an Erlang shell by running:
 $ erl
 Then, from within the Erlang shell, start the bot itself:
 > c(erlbot),
-> erlbot:start({"hostname", 6667}, {"bot_nick", "admin_pass"}, []).
+> erlbot:start({"hostname", 6667}, {"bot_nick", "admin_pass", []}, []).
 
-This will start the bot. You can boss it around by /msg:ing it:
+This will start the bot. The empty list in the config tuple denotes a list
+of channels to join after connecting to the server.
+The empty list that's passed as the last argument is the list of plugins to
+load.
+
+You can boss it around by /msg:ing it:
 /msg bot_nick admin_pass join #some_channel
 /msg bot_nick admin_pass part #some_channel
 /msg bot_nick admin_pass reload
