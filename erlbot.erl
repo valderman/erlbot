@@ -68,7 +68,7 @@ connect(Server, Config, Handlers, await_timeout) ->
 	    erlbot:connect(Server, Config, Handlers, await_timeout)
     end;
 
-connect({Addr, Port}, {Nick, AdminPass}, Handlers, FailedTries) ->
+connect({Addr, Port}, {Nick, AdminPass, Chans}, Handlers, FailedTries) ->
     %% Open connection to IRC service
     io:format("Connecting to ~s...~n", [Addr]),
     case gen_tcp:connect(Addr, Port, [binary]) of
@@ -82,17 +82,23 @@ connect({Addr, Port}, {Nick, AdminPass}, Handlers, FailedTries) ->
 	    lists:map(fun(M) ->
 			      spawn(fun() -> M:init(Socket, Nick) end)
 		      end, Handlers),
-	    Reconnect = fun() ->
+	    Reconnect = fun(Chs) ->
 				connect({Addr, Port},
-					{Nick, AdminPass},
+					{Nick, AdminPass, Chs},
 					Handlers,
 					0)
 			end,
 	    io:format("OK! Entering main loop.~n"),
-	    main(Socket, AdminPass, Nick, Handlers, Reconnect);
+
+	    %% Post rejoin messages to self, then enter main loop.
+	    %% Messages are to be delivered after we can be reasonably sure
+	    %% that the server will accept them; 10 seconds delay will do.
+	    lists:map(fun(C) -> timer:send_after(10000, {join, C}) end, Chans),
+	    main(Socket, AdminPass, Nick, Handlers, {Chans, Reconnect});
 	_ ->
 	    io:format("Failed! Retrying...~n"),
-	    connect({Addr, Port}, {Nick, AdminPass}, Handlers, FailedTries+1)
+	    connect({Addr, Port}, {Nick, AdminPass, Chans},
+		    Handlers, FailedTries+1)
     end.
 
 
@@ -126,10 +132,10 @@ reload_all(Handlers, From) ->
     end.
 
 %% Our main message loop
-main(Sock, AdmPass, Nick, Handlers, Reconnect) ->
+main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
     %% Keep the loop call in a variable; less hassle that way.
     Loop = fun() ->
-		   erlbot:main(Sock, AdmPass, Nick, Handlers, Reconnect)
+		   erlbot:main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect})
 	   end,
 
     receive
@@ -139,12 +145,23 @@ main(Sock, AdmPass, Nick, Handlers, Reconnect) ->
 	    lists:map(fun(M) ->
 			      spawn(fun() -> M:die() end)
 		      end, Handlers),	    
-	    Reconnect();
+	    Reconnect(Chs);
 
 	%% Reload all running code, then report error or success to the caller.
 	{reload, From} ->
 	    reload_all(Handlers, From),
 	    Loop();
+
+	%% Someone wants us to join a channel; let's do it!
+	{join, Channel} ->
+	    irc:join(Sock, Channel),
+	    main(Sock, AdmPass, Nick, Handlers, {[Channel | Chs], Reconnect});
+
+	%% Parting from a channel
+	{part, Channel} ->
+	    irc:part(Sock, Channel),
+	    main(Sock, AdmPass, Nick, Handlers,
+		 {lists:delete(Channel, Chs), Reconnect});
 
 	%% Adds and starts a new plugin.
 	{load, Plug, From} ->
@@ -163,7 +180,7 @@ main(Sock, AdmPass, Nick, Handlers, Reconnect) ->
 				 AdmPass,
 				 Nick,
 				 [Plug | Handlers],
-				 Reconnect);
+				 {Chs, Reconnect});
 			Err ->
 			    io:format("Loading plugin FAILED!~n", []),
 			    io:format("Readon: ~w~n", [Err]),
@@ -180,7 +197,7 @@ main(Sock, AdmPass, Nick, Handlers, Reconnect) ->
 		    Plug:die(),
 		    Hs = lists:delete(Plug, Handlers),
 		    From ! ok,
-		    main(Sock, AdmPass, Nick, Hs, Reconnect);
+		    main(Sock, AdmPass, Nick, Hs, {Chs, Reconnect});
 		_ ->
 		    io:format("Plugin not loaded!~n", []),
 		    From ! not_loaded,
@@ -255,10 +272,10 @@ priv_handler(Sock, AdmPass, Handlers, Mess={From, _, Message}) ->
 	    case Cmd of
 		%% Command to join a channel.
 		["join", Channel] ->
-		    irc:join(Sock, Channel);
+		    erlbot ! {join, Channel};
 		%% Command to leave a channel.
 		["part", Channel] ->
-		    irc:part(Sock, Channel);
+		    erlbot ! {part, Channel};
 		%% Command to reload all running code.
 		["reload"] ->
 		    case reload() of
