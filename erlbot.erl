@@ -276,6 +276,12 @@ priv_handler(Sock, AdmPass, Handlers, Mess={From, _, Message}) ->
 		%% Command to leave a channel.
 		["part", Channel] ->
 		    erlbot ! {part, Channel};
+		%% Command to leave a channel.
+		["load", Plugin] ->
+		    erlbot:load(list_to_atom(Plugin));
+		%% Command to leave a channel.
+		["unload", Plugin] ->
+		    erlbot:unload(list_to_atom(Plugin));
 		%% Command to reload all running code.
 		["reload"] ->
 		    case reload() of
