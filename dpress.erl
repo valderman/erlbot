@@ -2,6 +2,18 @@
 -export([init/2, die/0, priv/2, chan/2, noise/2,
 	 mediator/1, ready_to_connect/0]).
 
+%% Truncate a string to the first N chars.
+truncate(Xs, N) ->
+    truncate(Xs, N, []).
+
+truncate(_, 0, Acc) ->
+    lists:reverse(Acc);
+truncate([X|Xs], N, Acc) ->
+    truncate(Xs, N-1, [X | Acc]);
+truncate([], _, Acc) ->
+    lists:reverse(Acc).
+
+
 %% Initialize module; in our case, we just start the dpress mediator process.
 init(IrcSocket, Nick) ->
     %% If dpress is already registered, attempt to kill the process. If that
@@ -59,7 +71,7 @@ mediator(Sock) ->
 	    gen_tcp:send(Sock, Q ++ "\n"),
 	    receive
 		{tcp, _, Ans} ->
-		    From ! {reply, Ans},
+		    From ! {reply, truncate(Ans, 200)},
 		    dpress:mediator(Sock)
 	    end;
 
