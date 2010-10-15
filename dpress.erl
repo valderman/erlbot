@@ -4,6 +4,22 @@
 
 %% Initialize module; in our case, we just start the dpress mediator process.
 init(IrcSocket, Nick) ->
+    %% If dpress is already registered, attempt to kill the process. If that
+    %% doesn't result in dpress unregistering within a second, then the process
+    %% is clearly defunct so we unregister the atom ourselves.
+    case lists:member(dpress, registered()) of
+	true ->
+	    die(),
+	    timer:sleep(1000),
+	    case lists:member(dpress, registered()) of
+		true ->
+		    unregister(dpress);
+		_ ->
+		    ok
+	    end;
+	_ ->
+	    ok
+    end,
     Mediator = spawn(fun dpress:ready_to_connect/0),
     register(dpress, Mediator).
 
@@ -80,8 +96,8 @@ mediator(Sock) ->
 
 	%% Shutdown requested; bye!
 	die ->
-	    unregister(dpress),
 	    gen_tcp:close(Sock),
+	    unregister(dpress),
 	    ok
     end.
     
