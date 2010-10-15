@@ -71,7 +71,7 @@ mediator(Sock) ->
 	    gen_tcp:send(Sock, Q ++ "\n"),
 	    receive
 		{tcp, _, Ans} ->
-		    From ! {reply, truncate(Ans, 200)},
+		    From ! {reply, truncate(Ans, 450)},
 		    dpress:mediator(Sock)
 	    end;
 
