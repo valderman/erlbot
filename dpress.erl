@@ -18,6 +18,8 @@ ready_to_connect() ->
 		    %% to be resent after the handshake.
 		    timer:send_after(3000, Msg),
 		    dpress:mediator(Sock);
+		die ->
+		    unregister(dpress);
 		_ ->
 		    case Msg of
 			{_, _, From} ->
