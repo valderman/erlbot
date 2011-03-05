@@ -12,8 +12,9 @@ truncate([X|Xs], N, Acc) ->
 truncate([], _, Acc) ->
     lists:reverse(Acc).
 
-%% Main function of plugin; starts a new process for the plugin, which then
+%% Entry point of plugin; starts a new process for the plugin, which then
 %% receives events as messages.
+%% This function must return the PID of the plugin's message handler process.
 start(IrcSocket, Nick) ->
     %% If dpress is already registered, attempt to kill the process. If that
     %% doesn't result in dpress unregistering within a second, then the process
@@ -35,12 +36,13 @@ start(IrcSocket, Nick) ->
              Mediator = spawn_link(fun dpress:ready_to_connect/0),
 	     main(IrcSocket, Mediator)
 	 end),
-    register(dpress, DP).
+    register(dpress, DP),
+    DP.
 
 
 
-%% Main event handler for the plugin; must handle messages die, priv, chan,
-%% noise and reconnect.
+%% Main event handler for the plugin; must handle messages die, priv, chan and
+%% noise.
 %% Each handled message must be acknowleged by replying ok to the sender.
 main(Sock, Mediator) ->
     receive
@@ -84,12 +86,6 @@ main(Sock, Mediator) ->
 	    receive _ -> ok end,
 	    Pid ! ok,
 	    main(Sock, Mediator);
-	
-	%% reconnect message; for some reason the connection was reset, so we
-	%% must use a new socket.
-	{reconnect, S, Pid} ->
-	    Pid ! ok,
-	    main(S, Mediator)
     end.
 
 

@@ -78,9 +78,7 @@ connect({Addr, Port}, {Nick, AdminPass, Chans}, Handlers, FailedTries) ->
 
 	    io:format("OK! Initializing plugins...~n"),
 	    %% Init plugins
-	    lists:map(fun(M) ->
-			      spawn(fun() -> M:start(Socket, Nick) end)
-		      end, Handlers),
+	    lists:map(fun(M) -> watchdog(M, Socket, Nick) end, Handlers),
 	    Reconnect = fun(Chs) ->
 				connect({Addr, Port},
 					{Nick, AdminPass, Chs},
@@ -130,6 +128,31 @@ reload_all(Handlers, From) ->
 	    io:format("Reload FAILED!~nReason: ~w~n", [Error])
     end.
 
+%% Start a plugin with a watchdog process that restarts it if it fails.
+watchdog(Plug, Sock, Nick) ->
+    io:format("Watchdogging ~w...~n", [Plug]),
+    spawn(fun() ->
+        process_flag(trap_exit, true),
+	link(Plug:start(Sock, Nick)),
+	watch(Plug, Sock, Nick)
+        end).
+
+%% Watch over a process, restarting it if it dies.
+watch(Plug, Sock, Nick) ->
+    receive
+	{'EXIT', _, normal} ->
+	    bye_bye;
+	{'EXIT', _, Why} ->
+	    io:format("Plugin ~w died because '~w'; restarting...~n",
+		      [Plug, Why]),
+	    link(Plug:start(Sock, Nick)),
+	    watch(Plug, Sock, Nick);
+	{die, From} ->
+	    Plug ! die,
+	    receive ok -> ok end,
+	    From ! ok;
+    end.
+
 %% Our main message loop
 main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
     %% Keep the loop call in a variable; less hassle that way.
@@ -171,7 +194,7 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 		_ ->
 		    case reload([Plug]) of
 			ok ->
-			    Plug:start(Sock, Nick),
+			    watchdog(Plug, Sock, Nick),
 			    From ! ok,
 			    main(Sock,
 				 AdmPass,
@@ -205,7 +228,7 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 	restart_plugins ->
 	    io:format("Restarting all plugins...", []),
 	    lists:map(fun(M) -> M ! {die, self()} end, Handlers),
-	    lists:map(fun(M) -> M:start(Sock, Nick) end, Handlers),
+	    lists:map(fun(M) -> watchdog(M, Sock, Nick) end, Handlers),
 	    io:format("OK!~n", []),
 	    Loop();
 
