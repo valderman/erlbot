@@ -133,7 +133,9 @@ watchdog(Plug, Sock, Nick) ->
     io:format("Watchdogging ~w...~n", [Plug]),
     spawn(fun() ->
         process_flag(trap_exit, true),
-	link(Plug:start(Sock, Nick)),
+	Pid = Plug:start(Sock, Nick),
+	link(Pid),
+	register(Plug, Pid),
 	watch(Plug, Sock, Nick)
         end).
 
@@ -145,12 +147,14 @@ watch(Plug, Sock, Nick) ->
 	{'EXIT', _, Why} ->
 	    io:format("Plugin ~w died because '~w'; restarting...~n",
 		      [Plug, Why]),
-	    link(Plug:start(Sock, Nick)),
+	    Pid = Plug:start(Sock, Nick),
+	    link(Pid),
+	    register(Plug, Pid),
 	    watch(Plug, Sock, Nick);
 	{die, From} ->
 	    Plug ! die,
 	    receive ok -> ok end,
-	    From ! ok;
+	    From ! ok
     end.
 
 %% Our main message loop

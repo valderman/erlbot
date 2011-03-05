@@ -16,28 +16,10 @@ truncate([], _, Acc) ->
 %% receives events as messages.
 %% This function must return the PID of the plugin's message handler process.
 start(IrcSocket, Nick) ->
-    %% If dpress is already registered, attempt to kill the process. If that
-    %% doesn't result in dpress unregistering within a second, then the process
-    %% is clearly defunct so we unregister the atom ourselves.
-    case lists:member(dpress, registered()) of
-	true ->
-	    dpress ! die,
-	    timer:sleep(1000),
-	    case lists:member(dpress, registered()) of
-		true ->
-		    unregister(dpress);
-		_ ->
-		    ok
-	    end;
-	_ ->
-	    ok
-    end,
-    DP = spawn(fun() ->
+    spawn(fun() ->
              Mediator = spawn_link(fun dpress:ready_to_connect/0),
 	     main(IrcSocket, Mediator)
-	 end),
-    register(dpress, DP),
-    DP.
+	 end).
 
 
 
@@ -85,7 +67,7 @@ main(Sock, Mediator) ->
 	    Mediator ! {feed, Msg, self()},
 	    receive _ -> ok end,
 	    Pid ! ok,
-	    main(Sock, Mediator);
+	    main(Sock, Mediator)
     end.
 
 
