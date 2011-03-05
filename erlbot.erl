@@ -50,7 +50,33 @@ start(Server, Config, Handlers) ->
 	    whatever
     end,
     register(erlbot, Pid),
+    erlbot_watchdog(Pid),
     ok.
+
+%% Start the main process watchdog.
+erlbot_watchdog(Pid) ->
+    spawn(fun() ->
+	      register(erlbot_watchdog, self()),
+	      process_flag(trap_exit, true),
+	      link(Pid),
+	      watch_erlbot([], [], fun(_) -> ok end)
+	  end).
+
+%% Keep an eye on the main erlbot process, restarting it if it dies.
+watch_erlbot(Chs, Handlers, Reconnect) ->
+    receive
+	{'EXIT', _, normal} ->
+	    bye_bye;
+	{'EXIT', _, Why} ->
+	    io:format("Erlbot died! Reason: ~w. Restarting...~n", [Why]),
+	    lists:map(fun(M) -> M ! {die, self()} end, Handlers),
+	    Pid = spawn(fun() -> Reconnect(Chs) end),
+	    link(Pid),
+	    register(erlbot, Pid),
+	    watch_erlbot(Chs, Handlers, Reconnect);
+	{update, C, H, R} ->
+	    watch_erlbot(C, H, R)
+    end.
 
 %% Connect to the given service.
 %% If we already failed three times, wait ten minutes and retry.
@@ -94,6 +120,7 @@ connect({Addr, Port}, {Nick, AdminPass, Chans}, Handlers, FailedTries) ->
 	    %% Messages are to be delivered after we can be reasonably sure
 	    %% that the server will accept them; 10 seconds delay will do.
 	    lists:map(fun(C) -> timer:send_after(10000, {join, C}) end, Chans),
+	    erlbot_watchdog ! {update, Chans, Handlers, Reconnect},
 	    main(Socket, AdminPass, Nick, Handlers, {Chans, Reconnect});
 	_ ->
 	    io:format("Failed! Retrying...~n"),
@@ -173,6 +200,7 @@ watch(Plug, Sock, Nick, LastError) ->
 	    From ! ok
     end.
 
+
 %% Our main message loop
 main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
     %% Keep the loop call in a variable; less hassle that way.
@@ -195,13 +223,16 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 	%% Someone wants us to join a channel; let's do it!
 	{join, Channel} ->
 	    irc:join(Sock, Channel),
-	    main(Sock, AdmPass, Nick, Handlers, {[Channel | Chs], Reconnect});
+            Chans = [Channel | Chs],
+	    erlbot_watchdog ! {update, Chans, Handlers, Reconnect},
+	    main(Sock, AdmPass, Nick, Handlers, {Chans, Reconnect});
 
 	%% Parting from a channel
 	{part, Channel} ->
 	    irc:part(Sock, Channel),
-	    main(Sock, AdmPass, Nick, Handlers,
-		 {lists:delete(Channel, Chs), Reconnect});
+	    Chans = lists:delete(Channel, Chs),
+	    erlbot_watchdog ! {update, Chans, Handlers, Reconnect},
+	    main(Sock, AdmPass, Nick, Handlers, {Chans, Reconnect});
 
 	%% Adds and starts a new plugin.
 	{load, Plug, From} ->
@@ -215,6 +246,8 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 		    case reload([Plug]) of
 			ok ->
 			    watchdog(Plug, Sock, Nick),
+			    erlbot_watchdog !
+				{update, Chs, [Plug|Handlers], Reconnect},
 			    From ! ok,
 			    main(Sock,
 				 AdmPass,
@@ -236,6 +269,7 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 		true ->
 		    Plug ! {die, self()},
 		    Hs = lists:delete(Plug, Handlers),
+		    erlbot_watchdog ! {update, Chs, Hs, Reconnect},
 		    From ! ok,
 		    main(Sock, AdmPass, Nick, Hs, {Chs, Reconnect});
 		_ ->
