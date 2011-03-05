@@ -22,7 +22,9 @@ main(Sock) ->
 		GnuPos > 0 ->
 		    ok;
 		(LinPos > 0) or (LinPos2 > 0) ->
-		    interject(Sock, From, Chan)
+		    interject(Sock, From, Chan);
+		true ->
+		    ok
 	    end,
 	    Pid ! ok,
 	    main(Sock)
