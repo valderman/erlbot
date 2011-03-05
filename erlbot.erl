@@ -141,9 +141,7 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 	%% The connection died; kill all plugins, then try to reconnect.
 	{tcp_closed, _} ->
 	    io:format("Connection lost; reconnecting!~n"),
-	    lists:map(fun(M) ->
-			      spawn(fun() -> M ! {die, self()} end)
-		      end, Handlers),	    
+	    lists:map(fun(M) -> M ! {die, self()} end, Handlers),	    
 	    Reconnect(Chs);
 
 	%% Reload all running code, then report error or success to the caller.
@@ -245,11 +243,11 @@ handle_message(Sock, AdmPass, Nick, Handlers, Message) ->
     pong_if_necessary(Sock, Message),
     case irc:parse(Message, Nick) of
 	{privmsg, Msg} ->
-	    spawn(fun() -> priv_handler(Sock, AdmPass, Handlers, Msg) end);
+	    priv_handler(Sock, AdmPass, Handlers, Msg);
 	{chanmsg, Msg} ->
-	    spawn(fun() -> send_all(Handlers, {chan, Msg, self()}) end);
+	    send_all(Handlers, {chan, Msg, self()});
 	{noise,   Msg} ->
-	    spawn(fun() -> send_all(Handlers, {noise, Msg, self()}) end);
+	    send_all(Handlers, {noise, Msg, self()});
 	_ ->
 	    whatever
     end.
