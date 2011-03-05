@@ -188,7 +188,6 @@ watch(Plug, Sock, Nick, LastError) ->
 		true ->
 		    io:format("Plugin ~w died because '~w'; restarting...~n",
 			      [Plug, Why]),
-		    unregister(Plug),
 		    Pid = Plug:start(Sock, Nick),
 		    link(Pid),
 		    register(Plug, Pid),
