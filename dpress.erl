@@ -110,6 +110,8 @@ mediator(Sock) ->
 		{tcp, _, Ans} ->
 		    From ! {reply, truncate(Ans, 450)},
 		    dpress:mediator(Sock)
+	    after 5000 ->
+		exit(no_response_from_dpress_server)
 	    end;
 
 	%% Feed the text generator.
@@ -119,6 +121,8 @@ mediator(Sock) ->
 		{tcp, _, _} ->
 		    From ! ok,
 		    dpress:mediator(Sock)
+	    after 5000 ->
+		exit(no_response_from_dpress_server)
 	    end;
 
 	%% Save the current dictionary.
