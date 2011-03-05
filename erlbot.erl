@@ -26,11 +26,10 @@ unload(Module) ->
 %% Start the bot.
 %% The first argument is the pair of {address, port} of the IRC service to
 %%   connect to.
-%% The second argument is the nickname to use for the bot, and the admin
-%%   password, used to give the bot administrative commands.
+%% The second argument is the nickname to use for the bot, the admin password
+%%   used to give the bot administrative commands, and the list of channels to
+%%   connect to, in that order.
 %% The third argument is a list of handler modules for various events.
-%%   A handler module must export the functions priv/2, chan/2, noise/2,
-%%   init/2 and die/0.
 %%   See dpress.erl for an example of what such a module might look like.
 start(Server, Config, Handlers) ->
     case reload([irc, erlbot] ++ Handlers) of
@@ -80,7 +79,7 @@ connect({Addr, Port}, {Nick, AdminPass, Chans}, Handlers, FailedTries) ->
 	    io:format("OK! Initializing plugins...~n"),
 	    %% Init plugins
 	    lists:map(fun(M) ->
-			      spawn(fun() -> M:init(Socket, Nick) end)
+			      spawn(fun() -> M:start(Socket, Nick) end)
 		      end, Handlers),
 	    Reconnect = fun(Chs) ->
 				connect({Addr, Port},
@@ -143,7 +142,7 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 	{tcp_closed, _} ->
 	    io:format("Connection lost; reconnecting!~n"),
 	    lists:map(fun(M) ->
-			      spawn(fun() -> M:die() end)
+			      spawn(fun() -> M ! {die, self()} end)
 		      end, Handlers),	    
 	    Reconnect(Chs);
 
@@ -174,7 +173,7 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 		_ ->
 		    case reload([Plug]) of
 			ok ->
-			    Plug:init(Sock, Nick),
+			    Plug:start(Sock, Nick),
 			    From ! ok,
 			    main(Sock,
 				 AdmPass,
@@ -194,7 +193,7 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 	    io:format("Unloading plugin ~w~n", [Plug]),
 	    case lists:member(Plug, Handlers) of
 		true ->
-		    Plug:die(),
+		    Plug ! {die, self()},
 		    Hs = lists:delete(Plug, Handlers),
 		    From ! ok,
 		    main(Sock, AdmPass, Nick, Hs, {Chs, Reconnect});
@@ -207,8 +206,8 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 	%% Restart all plugins.
 	restart_plugins ->
 	    io:format("Restarting all plugins...", []),
-	    lists:map(fun(M) -> M:die() end, Handlers),
-	    lists:map(fun(M) -> M:init(Sock, Nick) end, Handlers),
+	    lists:map(fun(M) -> M ! {die, self()} end, Handlers),
+	    lists:map(fun(M) -> M:start(Sock, Nick) end, Handlers),
 	    io:format("OK!~n", []),
 	    Loop();
 
@@ -234,7 +233,7 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 kill_self(no_socket, Handlers) ->
     io:format("OK, dying...~n"),
     unregister(erlbot),
-    lists:map(fun(M) -> M:die() end, Handlers);
+    lists:map(fun(M) -> M ! {die, self()} end, Handlers);
 kill_self(Sock, Handlers) ->
     irc:quit(Sock, "No particular reason."),
     gen_tcp:shutdown(Sock, read_write),
@@ -248,9 +247,9 @@ handle_message(Sock, AdmPass, Nick, Handlers, Message) ->
 	{privmsg, Msg} ->
 	    spawn(fun() -> priv_handler(Sock, AdmPass, Handlers, Msg) end);
 	{chanmsg, Msg} ->
-	    spawn(fun() -> chan_handler(Sock, Handlers, Msg) end);
+	    spawn(fun() -> send_all(Handlers, {chan, Msg, self()}) end);
 	{noise,   Msg} ->
-	    spawn(fun() -> noise_handler(Sock, Handlers, Msg) end);
+	    spawn(fun() -> send_all(Handlers, {noise, Msg, self()}) end);
 	_ ->
 	    whatever
     end.
@@ -290,7 +289,7 @@ priv_handler(Sock, AdmPass, Handlers, Mess={From, _, Message}) ->
 			    irc:privmsg(Sock, From, "Reloaded!");
 			_ ->
 			    ErrMsg = "Reload failed!",
-			    irc:privmst(Sock, From, ErrMsg)
+			    irc:privmsg(Sock, From, ErrMsg)
 		    end;
 		%% Command to kill the bot and go home.
 		["die"] ->
@@ -299,17 +298,9 @@ priv_handler(Sock, AdmPass, Handlers, Mess={From, _, Message}) ->
 		    irc:privmsg(Sock, From, "No such command!")
 	    end;
 	_ ->
-	    lists:map(fun(M) ->
-			      spawn(fun() ->
-					    M:priv(Sock, Mess)
-				    end)
-		      end, Handlers)
+	    lists:map(fun(M) -> M ! {priv, {From, Mess}, self()} end, Handlers)
     end.
 
-%% Handle messages directed to us in a channel.
-chan_handler(Sock, Handlers, Msg) ->
-    lists:map(fun(M) -> spawn(fun() -> M:chan(Sock, Msg) end) end, Handlers).
-
-%% Handle messages directed to us in a channel.
-noise_handler(Sock, Handlers, Msg) ->
-    lists:map(fun(M) -> spawn(fun() -> M:noise(Sock, Msg) end) end, Handlers).
+%% Send a particular message to all handlers in the given list.
+send_all(Handlers, Msg) ->
+    lists:map(fun(M) -> M ! Msg end, Handlers).

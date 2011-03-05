@@ -1,6 +1,5 @@
 -module(dpress).
--export([init/2, die/0, priv/2, chan/2, noise/2,
-	 mediator/1, ready_to_connect/0]).
+-export([start/2, mediator/1, ready_to_connect/0]).
 
 %% Truncate a string to the first N chars.
 truncate(Xs, N) ->
@@ -13,15 +12,15 @@ truncate([X|Xs], N, Acc) ->
 truncate([], _, Acc) ->
     lists:reverse(Acc).
 
-
-%% Initialize module; in our case, we just start the dpress mediator process.
-init(IrcSocket, Nick) ->
+%% Main function of plugin; starts a new process for the plugin, which then
+%% receives events as messages.
+start(IrcSocket, Nick) ->
     %% If dpress is already registered, attempt to kill the process. If that
     %% doesn't result in dpress unregistering within a second, then the process
     %% is clearly defunct so we unregister the atom ourselves.
     case lists:member(dpress, registered()) of
 	true ->
-	    die(),
+	    dpress ! die,
 	    timer:sleep(1000),
 	    case lists:member(dpress, registered()) of
 		true ->
@@ -32,13 +31,75 @@ init(IrcSocket, Nick) ->
 	_ ->
 	    ok
     end,
-    Mediator = spawn(fun dpress:ready_to_connect/0),
-    register(dpress, Mediator).
+    DP = spawn(fun() ->
+             Mediator = spawn_link(fun dpress:ready_to_connect/0),
+	     main(IrcSocket, Mediator)
+	 end),
+    register(dpress, DP).
 
+
+
+%% Main event handler for the plugin; must handle messages die, priv, chan,
+%% noise and reconnect.
+%% Each handled message must be acknowleged by replying ok to the sender.
+main(Sock, Mediator) ->
+    receive
+	%% die message; we're being unloaded, so clean up and quit.
+	{die, Pid} ->
+	    unregister(dpress),
+	    Pid ! ok,
+	    Mediator ! die;
+
+	%% priv message; someone /msg'd us and we treat it as a question.
+	{priv, {From, Msg}, Pid} ->
+	    Mediator ! {ask, Msg, self()},
+	    receive
+		{reply, Ans} ->
+		    [Text | _] = irc:lines(Ans),
+		    irc:privmsg(Sock, From, Text),
+		    Pid ! ok;
+		_ ->
+		    Pid ! ok
+	    end,
+	    main(Sock, Mediator);
+
+	%% chan message; someone addressed us in a public channel.
+	%% That's also a question.
+	{chan, {From, Chan, Msg}, Pid} ->
+	    Mediator ! {ask, Msg, self()},
+	    receive
+		{reply, Ans} ->
+		    [Text | _] = irc:lines(Ans),
+		    irc:privmsg(Sock, Chan, From ++ ": " ++ Text),
+		    Pid ! ok;
+		_ ->
+		    Pid ! ok
+	    end,
+	    main(Sock, Mediator);
+
+	%% noise message; someone said something in a public channel, but it
+	%% wasn't directed at us. Feed the generator with it.
+	{noise, {From, Chan, Msg}, Pid} ->
+	    Mediator ! {feed, Msg, self()},
+	    receive _ -> ok end,
+	    Pid ! ok,
+	    main(Sock, Mediator);
+	
+	%% reconnect message; for some reason the connection was reset, so we
+	%% must use a new socket.
+	{reconnect, S, Pid} ->
+	    Pid ! ok,
+	    main(S, Mediator)
+    end.
+
+
+%% Lazy connection to the dpress server.
 %% Wait until we get any messages. When we do, try to open a connection. If we
 %% fail, stay in ready_to_connect state and notify the caller of the failure.
 ready_to_connect() ->
     receive
+	die ->
+	    ok;
 	Msg ->
 	    case gen_tcp:connect(localhost, 1917, [list]) of
 		{ok, Sock} ->
@@ -46,8 +107,6 @@ ready_to_connect() ->
 		    %% to be resent after the handshake.
 		    timer:send_after(3000, Msg),
 		    dpress:mediator(Sock);
-		die ->
-		    unregister(dpress);
 		_ ->
 		    case Msg of
 			{_, _, From} ->
@@ -88,7 +147,7 @@ mediator(Sock) ->
 	{save, From} ->
 	    gen_tcp:send(Sock, ":save\n"),
 	    receive
-		{tcp, _, Ans} ->
+		{tcp, _, _} ->
 		    From ! ok,
 		    dpress:mediator(Sock)
 	    end;
@@ -97,52 +156,17 @@ mediator(Sock) ->
 	{load, From} ->
 	    gen_tcp:send(Sock, ":load\n"),
 	    receive
-		{tcp, _, Ans} ->
+		{tcp, _, _} ->
 		    From ! ok,
 		    dpress:mediator(Sock)
 	    end;
 
 	%% Connection died; go to ready_to_connect state.
-	{tcp_closed, S} ->
+	{tcp_closed, _} ->
 	    dpress:ready_to_connect();
 
 	%% Shutdown requested; bye!
 	die ->
 	    gen_tcp:close(Sock),
-	    unregister(dpress),
 	    ok
-    end.
-    
-
-%% Perform any cleanup before unloading here.
-die() ->    
-    dpress ! die.
-
-%% If we got a private message, treat it as a question.
-priv(Sock, {From, Chan, Msg}) ->
-    dpress ! {ask, Msg, self()},
-    receive
-	{reply, Ans} ->
-	    [Text | _] = irc:lines(Ans),
-	    irc:privmsg(Sock, From, Text);
-	_ ->
-	    ok
-    end.
-
-%% If we got a directed channel message, treat it as a question.
-chan(Sock, {From, Chan, Msg}) ->
-    dpress ! {ask, Msg, self()},
-    receive
-	{reply, Ans} ->
-	    [Text | _] = irc:lines(Ans),
-	    irc:privmsg(Sock, Chan, From ++ ": " ++ Text);
-	_ ->
-	    ok
-    end.
-
-%% If we got channel noise, feed it to the text generator.
-noise(Sock, {From, Chan, Msg}) ->
-    dpress ! {feed, Msg, self()},
-    receive
-	_ -> ok
     end.
