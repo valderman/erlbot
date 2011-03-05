@@ -7,6 +7,9 @@
 quakenet() ->
     {"irc.quakenet.org", 6667}.
 
+%% Unload plugins that die more often than this many microseconds.
+min_err_interval() ->
+    1000000.
 
 %% Sends a reload message and waits for confirmation.
 reload() ->
@@ -136,21 +139,34 @@ watchdog(Plug, Sock, Nick) ->
 	Pid = Plug:start(Sock, Nick),
 	link(Pid),
 	register(Plug, Pid),
-	watch(Plug, Sock, Nick)
+	watch(Plug, Sock, Nick, {0,0,0})
         end).
 
 %% Watch over a process, restarting it if it dies.
-watch(Plug, Sock, Nick) ->
+watch(Plug, Sock, Nick, LastError) ->
     receive
 	{'EXIT', _, normal} ->
 	    bye_bye;
 	{'EXIT', _, Why} ->
-	    io:format("Plugin ~w died because '~w'; restarting...~n",
-		      [Plug, Why]),
-	    Pid = Plug:start(Sock, Nick),
-	    link(Pid),
-	    register(Plug, Pid),
-	    watch(Plug, Sock, Nick);
+	    T = now(),
+	    Dies_too_often = timer:now_diff(T, LastError) < min_err_interval(),
+	    if
+		%% If the plugin dies too often, something is probably
+		%% permanently wrong, so we disable it.
+		Dies_too_often ->
+		    io:format("Plugin ~w dies too often; unloading.~n",
+			      [Plug]),
+		    erlbot:unload(Plug);
+		%% Otherwise, reload it.
+		true ->
+		    io:format("Plugin ~w died because '~w'; restarting...~n",
+			      [Plug, Why]),
+		    unregister(Plug),
+		    Pid = Plug:start(Sock, Nick),
+		    link(Pid),
+		    register(Plug, Pid),
+		    watch(Plug, Sock, Nick, now())
+	    end;
 	{die, From} ->
 	    Plug ! die,
 	    receive ok -> ok end,
