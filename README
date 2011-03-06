@@ -67,10 +67,12 @@ To have that setup, here's a quick walkthrough:
    (This requires that you have GHC with network libraries installed.)
 2. Build a dictionary to start with from some text you like:
    $ ./compile < some_text.txt > dictionary.bin
-3. Start Erlbot with the dpress plugin:
+3. Start the dpress server:
+   $ ./server dictionary.bin
+4. Start Erlbot with the dpress plugin:
    > c(erlbot),
    > erlbot:start({"hostname", 6667}, {"bot_nick", "admin_pass", ["#some_channel"]}, [dpress]).
-4. Congratulations, you're now up and running!
+5. Congratulations, you're now up and running!
 
 ---
 
