@@ -54,10 +54,11 @@ You can also send it messages through the erlang shell:
 > erlbot:unload(module). %% This will unload the module 'module'.
 
 To actually have it do something, you need to add some plugins.
-Only one is included (though writing your own should be a fairly trivial
-affair;) dpress.erl. The dpress plugin requires another silly project of mine,
-dpress, in order to do something (namely, generate random sentences based on
-learnings from the channels the bot is in.)
+Only two are included (though writing your own should be a fairly trivial
+affair;) dpress.erl and interjection.erl.
+The dpress plugin requires another silly project of mine, dpress, in order
+to do something (namely, generate random sentences based on learnings from
+the channels the bot is in.)
 
 To have that setup, here's a quick walkthrough:
 1. Get dpress from http://github.com/valderman/dpress and compile it:
@@ -68,19 +69,15 @@ To have that setup, here's a quick walkthrough:
    $ ./compile < some_text.txt > dictionary.bin
 3. Start Erlbot with the dpress plugin:
    > c(erlbot),
-   > erlbot:start({"hostname", 6667}, {"bot_nick", "admin_pass"}, [dpress]).
+   > erlbot:start({"hostname", 6667}, {"bot_nick", "admin_pass", ["#some_channel"]}, [dpress]).
 4. Congratulations, you're now up and running!
-
-Like Erlbot, you can use the Erlang shell to boss the dpress plugin around:
-> dpress ! save. %% This will save the current dictionary to disk.
-> dpress ! load. %% This will reload the dictionary you saved to disk.
 
 ---
 
 
 3. About
 
-dpress (henceforth "the software") is written by Anton Ekblad (anton@ekblad.cc)
+erlbot (henceforth "the software") is written by Anton Ekblad (anton@ekblad.cc)
 and is made available to you under the terms of the WTFPL version 2.
 The full text of the license can be found at http://sam.zoy.org/wtfpl/.
 
@@ -89,4 +86,4 @@ anything, related to the software or not. The software comes with no warranty
 whatsoever.
 
 Although this is not required by the license, the author(s) would be very happy
-if you contributed any improvements you make back to dpress.
+if you contributed any improvements you make back to erlbot.
