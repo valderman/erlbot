@@ -101,6 +101,9 @@ connect({Addr, Port}, {Nick, AdminPass, Chans}, Handlers, FailedTries) ->
     io:format("Connecting to ~s...~n", [Addr]),
     case gen_tcp:connect(Addr, Port, [binary]) of
 	{ok, Socket} ->
+            MyPid = self(),
+            Pid = spawn(fun() -> tcp_buffer(MyPid, []) end),
+            gen_tcp:controlling_process(Socket, Pid),
 	    io:format("OK! Initializing IRC connection...~n"),
 	    %% Init IRC connection
 	    irc:init(Socket, Nick),
@@ -208,12 +211,6 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 	   end,
 
     receive
-	%% The connection died; kill all plugins, then try to reconnect.
-	{tcp_closed, _} ->
-	    io:format("Connection lost; reconnecting!~n"),
-	    lists:map(fun(M) -> M ! {die, self()} end, Handlers),	    
-	    Reconnect(Chs);
-
 	%% Reload all running code, then report error or success to the caller.
 	{reload, From} ->
 	    reload_all(Handlers, From),
@@ -289,19 +286,53 @@ main(Sock, AdmPass, Nick, Handlers, {Chs, Reconnect}) ->
 	die ->
 	    kill_self(Sock, Handlers);
 
-	%% Respond to PING messages
-	{tcp, S, <<"PING ", Data/binary>>} ->
-	    irc:pong(S, Data),
-	    Loop();
+	%% The connection died; kill all plugins, then try to reconnect.
+	reconnect ->
+	    io:format("Connection lost; reconnecting!~n"),
+	    lists:map(fun(M) -> M ! {die, self()} end, Handlers),	    
+	    Reconnect(Chs);
 
-	%% Unknown message; discard it.
-	{tcp, _, Data} ->
-	    lists:map(fun(Msg) ->
-			      handle_message(Sock, AdmPass, Nick, Handlers, Msg)
-		      end,
-		      irc:lines(binary_to_list(Data))),
-	    Loop()
+	%% Message came in; handle it!
+	{message, Data} ->
+            case lists:sublist(Data, 5) of
+                "PING " ->
+                    irc:pong(Sock, list_to_binary(lists:nthtail(5, Data))),
+                    Loop();
+                _ ->
+                    lists:map(fun(Msg) ->
+                                      handle_message(Sock,
+                                                     AdmPass,
+                                                     Nick,
+                                                     Handlers,
+                                                     Msg)
+                              end,
+                    irc:lines(Data)),
+                    Loop()
+            end
     end.
+
+%% Buffer incoming TCP messages until we have a complete IRC message. When a
+%% complete IRC message is found, pass it on to the main process.
+tcp_buffer(MainPid, OldData) ->
+    receive
+        {tcp_closed, _} ->
+            MainPid ! reconnect;
+        {tcp_error, _} ->
+            MainPid ! reconnect;
+        {tcp, _, Data} ->
+            Str = binary_to_list(Data),
+            {Msgs, NewOldData} = extract_msg(Str, {[], OldData}),
+            lists:map(fun(M) -> MainPid ! {message, M} end, Msgs),
+            tcp_buffer(MainPid, NewOldData)
+    end.
+
+%% Extract IRC messages from a string
+extract_msg([], {Msgs, Next}) ->
+    {lists:reverse(Msgs), Next};
+extract_msg([13|[10|Xs]], {Msgs, Next}) ->
+    extract_msg(Xs, {[lists:reverse(Next) | Msgs], []});
+extract_msg([X|Xs], {Msgs, Next}) ->
+    extract_msg(Xs, {Msgs, [X|Next]}).
 
 %% Kill the bot.
 kill_self(no_socket, Handlers) ->
